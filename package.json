@@ -1,0 +1,18 @@
+{
+  "name": "sns-bounce-processor",
+  "version": "1.0.0",
+  "description": "Processes SNS notifications for bounced emails and sends daily reports.",
+  "main": "index.js",
+  "scripts": {
+    "start": "node index.js"
+  },
+  "dependencies": {
+    "body-parser": "^1.20.2",
+    "express": "^4.18.2",
+    "fs": "0.0.1-security",
+    "node-cron": "^3.0.2",
+    "nodemailer": "^6.9.4",
+    "path": "^0.12.7",
+    "dotenv": "^16.4.7"
+  }
+}
