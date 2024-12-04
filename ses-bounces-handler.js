@@ -31,7 +31,7 @@ app.post('/sns', (req, res) => {
         console.log(message);
 
         // Check if 'Message' exists and is a valid JSON string
-        if (message && message.Message) {
+        if (message) {
             const parsedMessage = JSON.parse(message.Message);
             console.log('Parsed Message:', parsedMessage);
 
