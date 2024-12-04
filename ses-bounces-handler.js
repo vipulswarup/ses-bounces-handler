@@ -37,6 +37,14 @@ app.post('/sns', (req, res) => {
 
             const csvData = `${bouncedEmail},${timestamp},${sourceEmail},${sourceIp}\n`;
             fs.appendFileSync(csvFilePath, csvData);
+        } else if (message.Type === 'SubscriptionConfirmation') {
+            const subscribeURL = message.SubscribeURL;
+            console.log('Subscription confirmation received. Visiting:', subscribeURL);
+
+    
+
+            //Log the URL for manual confirmation
+            console.log('Please visit the following URL to confirm subscription:', subscribeURL);
         }
 
         res.status(200).json({ message: 'Notification processed' });
