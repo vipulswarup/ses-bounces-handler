@@ -24,6 +24,7 @@ if (!fs.existsSync(csvFilePath)) {
 // Handle SNS notifications
 app.post('/sns', (req, res) => {
     try {
+        console.log ("Inside the post /sns block");
         const message = req.body;
         console.log(message);
 
@@ -66,6 +67,7 @@ app.get('/download', (req, res) => {
 
 
 app.get('/sns', async (req, res) => {
+    console.log ("Inside the GET /sns block");
     try {
         const message = req.body;
         console.log(message);
