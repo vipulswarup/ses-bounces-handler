@@ -25,6 +25,7 @@ if (!fs.existsSync(csvFilePath)) {
 app.post('/sns', (req, res) => {
     try {
         const message = req.body;
+        console.log(message);
 
         if (message.notificationType === 'Bounce') {
             const bounce = message.bounce;
