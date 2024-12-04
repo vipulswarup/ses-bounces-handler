@@ -5,6 +5,7 @@ const bodyParser = require('body-parser');
 const nodemailer = require('nodemailer');
 const cron = require('node-cron');
 const dotenv = require('dotenv');
+const axios = require('axios');
 
 dotenv.config({ path: './email-details.config' });
 
@@ -24,33 +25,37 @@ if (!fs.existsSync(csvFilePath)) {
 // Handle SNS notifications
 app.post('/sns', (req, res) => {
     try {
-        console.log ("Inside the post /sns block");
+        console.log("Inside the post /sns block");
+
         const message = req.body;
         console.log(message);
 
-        if (message.notificationType === 'Bounce') {
-            const bounce = message.bounce;
-            const mail = message.mail;
+        // Check if 'Message' exists and is a valid JSON string
+        if (message && message.Message) {
+            const parsedMessage = JSON.parse(message.Message);
+            console.log('Parsed Message:', parsedMessage);
 
-            const bouncedEmail = bounce.bouncedRecipients[0].emailAddress;
-            const timestamp = bounce.timestamp;
-            const sourceEmail = mail.source;
-            const sourceIp = mail.sourceIp;
+            if (parsedMessage.notificationType === 'Bounce') {
+                const bounce = parsedMessage.bounce;
+                const mail = parsedMessage.mail;
 
-            const csvData = `${bouncedEmail},${timestamp},${sourceEmail},${sourceIp}\n`;
-            fs.appendFileSync(csvFilePath, csvData);
-        } 
-        
-        //Print message for confirmation message
-        var chunks = [];
-        req.on('data', function (chunk) {
-            chunks.push(chunk);
-            });
-        req.on('end', function () {
-        var message1 = JSON.parse(chunks.join(''));
-        console.log(message1);
-    });
-    res.end();
+                if (bounce && mail && bounce.bouncedRecipients && bounce.bouncedRecipients.length > 0) {
+                    const bouncedEmail = bounce.bouncedRecipients[0].emailAddress;
+                    const timestamp = bounce.timestamp;
+                    const sourceEmail = mail.source;
+                    const sourceIp = mail.sourceIp;
+
+                    const csvData = `${bouncedEmail},${timestamp},${sourceEmail},${sourceIp}\n`;
+                    fs.appendFileSync(csvFilePath, csvData);
+
+                    console.log('Bounce data saved successfully.');
+                } else {
+                    console.log('Invalid bounce or mail data.');
+                }
+            }
+        } else {
+            console.log('No valid message content found.');
+        }
 
         res.status(200).json({ message: 'Notification processed' });
     } catch (error) {
@@ -68,12 +73,10 @@ app.get('/download', (req, res) => {
     }
 });
 
-
+// Confirm subscription
 app.get('/sns', async (req, res) => {
-    console.log ("Inside the GET /sns block");
+    console.log("Inside the GET /sns block");
     try {
-        const message = req.body;
-        console.log(message);
         const subscribeURL = req.query['SubscribeURL'];
         if (subscribeURL) {
             console.log('Subscription confirmation received. Visiting:', subscribeURL);
@@ -121,13 +124,14 @@ cron.schedule('0 0 * * *', () => {
         });
     }
 
-    // Clean up old entries
+    // Clean up old entries (older than 30 days)
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
     const lines = fs.readFileSync(csvFilePath, 'utf8').split('\n');
     const filteredLines = lines.filter(line => {
         const timestamp = line.split(',')[1];
+        if (!timestamp) return false; // Handle potential empty lines
         const timestampDate = new Date(timestamp);
         return timestampDate > thirtyDaysAgo;
     });
