@@ -28,33 +28,28 @@ app.post('/sns', (req, res) => {
         console.log("Inside the post /sns block");
 
         const message = req.body;
-        console.log(message);
+        console.log('Received message:', message);
 
-        // Check if 'Message' exists and is a valid JSON string
-        if (message) {
-            const parsedMessage = JSON.parse(message.Message);
-            console.log('Parsed Message:', parsedMessage);
+        if (message.notificationType === 'Bounce') {
+            const bounce = message.bounce;
+            const mail = message.mail;
 
-            if (parsedMessage.notificationType === 'Bounce') {
-                const bounce = parsedMessage.bounce;
-                const mail = parsedMessage.mail;
+            if (bounce && mail && Array.isArray(bounce.bouncedRecipients) && bounce.bouncedRecipients.length > 0) {
+                const bouncedEmail = bounce.bouncedRecipients[0].emailAddress;
+                const timestamp = bounce.timestamp;
+                const sourceEmail = mail.source;
+                const sourceIp = mail.sourceIp;
 
-                if (bounce && mail && bounce.bouncedRecipients && bounce.bouncedRecipients.length > 0) {
-                    const bouncedEmail = bounce.bouncedRecipients[0].emailAddress;
-                    const timestamp = bounce.timestamp;
-                    const sourceEmail = mail.source;
-                    const sourceIp = mail.sourceIp;
+                // Prepare CSV data, with fields wrapped in double quotes to handle special characters
+                const csvData = `"${bouncedEmail}","${timestamp}","${sourceEmail}","${sourceIp}"\n`;
+                fs.appendFileSync(csvFilePath, csvData);
 
-                    const csvData = `${bouncedEmail},${timestamp},${sourceEmail},${sourceIp}\n`;
-                    fs.appendFileSync(csvFilePath, csvData);
-
-                    console.log('Bounce data saved successfully.');
-                } else {
-                    console.log('Invalid bounce or mail data.');
-                }
+                console.log('Bounce data saved successfully.');
+            } else {
+                console.log('Invalid bounce or mail data.');
             }
         } else {
-            console.log('No valid message content found.');
+            console.log('Notification type is not Bounce.');
         }
 
         res.status(200).json({ message: 'Notification processed' });
