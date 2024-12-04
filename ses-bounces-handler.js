@@ -64,6 +64,23 @@ app.get('/download', (req, res) => {
     }
 });
 
+
+app.get('/sns', async (req, res) => {
+    try {
+        const message = req.body;
+        console.log(message);
+        const subscribeURL = req.query['SubscribeURL'];
+        if (subscribeURL) {
+            console.log('Subscription confirmation received. Visiting:', subscribeURL);
+            await axios.get(subscribeURL);
+        }
+        res.sendStatus(200);
+    } catch (error) {
+        console.error('Error processing subscription confirmation:', error);
+        res.status(500).send('Error processing request');
+    }
+});
+
 // Schedule email with bounced emails every midnight
 const transporter = nodemailer.createTransport({
     host: process.env.SMTP_HOST,
