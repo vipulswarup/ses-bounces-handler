@@ -15,7 +15,7 @@ This is a simple HTTP Server to Handle API requests from Amazon SNS for SES Emai
 
 
 <h1> Installing the Script using NPM </h1>
-Ensure you gave Node and NPM installed.
+Ensure you have Node and NPM installed.
 Enter the directory where this script is cloned.
 
 ```bash
