@@ -33,24 +33,27 @@ app.post('/sns', (req, res) => {
         if (req.is('application/json')) {
             console.log("Received a application/json request");
             snsMessage = req.body; // Direct JSON parsing
-            console.log('Raw SNS Message (application/json):', JSON.stringify(snsMessage, null, 2));
+            //console.log('Raw SNS Message (application/json):', JSON.stringify(snsMessage, null, 2));
 
             // Debug: Log the raw Message content
-            console.log('Raw Message:', snsMessage.Message);
+            //console.log('Raw Message:', snsMessage.Message);
 
             // Try multiple parsing strategies
             let messageContent;
             try {
                 // First, try direct parsing
                 messageContent = JSON.parse(snsMessage.Message);
+                console.log('Parsed Message Object:', messageContent);
             } catch (directParseError) {
                 try {
                     // If that fails, try parsing after removing extra quotes and escaping
                     messageContent = JSON.parse(snsMessage.Message.replace(/\\"/g, '"').replace(/^"|"$/g, ''));
+                    console.log('Parsed Message Object with Replace:', messageContent);
                 } catch (escapedParseError) {
                     // If both fail, try parsing the original message content
                     try {
                         messageContent = JSON.parse(JSON.parse(snsMessage.Message));
+                        console.log('Double Parsed Message Object:', messageContent);
                     } catch (nestedParseError) {
                         console.error("Failed to parse Message content through multiple strategies:", {
                             directParseError,
@@ -62,7 +65,9 @@ app.post('/sns', (req, res) => {
                 }
             }
 
-            console.log('Parsed Message Content:', JSON.stringify(messageContent, null, 2));
+            //console.log('Parsed Message Content:', JSON.stringify(messageContent, null, 2));
+
+            console.log("Notification Type : "+messageContent.notificationType);
 
             // Rest of your existing processing logic...
             if (messageContent.notificationType === 'Bounce') {
