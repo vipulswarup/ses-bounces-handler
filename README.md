@@ -82,3 +82,12 @@ pm2 save
 ```
 
 This approach ensures reliability and ease of monitoring. Let me know if you want detailed steps for setting up PM2 or using another method.
+
+
+<h1>Important - SNS has to be setup to send JSON objects </h1>
+<ol>
+<li> In the Amazon SNS edit your subscription, and expand the "Delivery Policy HTTP/S - Optional" Section.
+<li> Uncheck "Use Default Delivery Policy"
+<li> Change Content  Type to : application/json
+<li> Save
+</ol>

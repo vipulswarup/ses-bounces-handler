@@ -24,33 +24,49 @@ if (!fs.existsSync(csvFilePath)) {
     fs.writeFileSync(csvFilePath, 'Bounced Email,Timestamp,Source Email,Source IP\n');
 }
 
-// Handle SNS notifications
 app.post('/sns', (req, res) => {
     try {
         console.log("Inside the POST /sns block");
 
-        let message;
-        if (typeof req.body === 'string') {
-            message = JSON.parse(req.body); // Parse stringified JSON from SNS
+        let snsMessage;
+
+        if (req.is('text/plain')) {
+            // Log raw body for debugging
+            //console.log('Raw SNS Message (text/plain):', req.body);
+            console.log ("Received a text/plain request");
+            // Replace invalid single quotes and parse as JSON-like object
+            const sanitizedBody = req.body.replace(/([a-zA-Z0-9_]+):/g, '"$1":').replace(/'/g, '"');
+            console.log('Sanitized Body:', sanitizedBody);
+
+            snsMessage = JSON.parse(sanitizedBody); // Parses fixed JSON
+        } else if (req.is('application/json')) {
+            //console.log('Raw SNS Message (application/json):', req.body);
+            console.log ("Received a application/json request");
+            snsMessage = req.body; // Direct JSON parsing
         } else {
-            message = req.body; // Use parsed JSON (e.g., when testing with Postman)
+            throw new Error('Unsupported Content-Type');
         }
 
-        console.log('Received message:', message);
+        //console.log('Parsed SNS Message:', snsMessage);
 
-        //extract the Message block from the request
-        message=message.Message;
-        if (message.notificationType === 'Bounce') {
-            const { bounce, mail } = message;
+        // Parse the `Message` field, which is a stringified JSON
+        //const messageContent = JSON.parse(snsMessage.Message);
+        messageContent = snsMessage.Message;
+        //console.log('Parsed Message Content:', messageContent);
+
+        if (messageContent.notificationType === 'Bounce') {
+            const { bounce, mail } = messageContent;
 
             if (bounce && mail && Array.isArray(bounce.bouncedRecipients) && bounce.bouncedRecipients.length > 0) {
-                const bouncedEmail = bounce.bouncedRecipients[0].emailAddress;
-                const timestamp = bounce.timestamp;
-                const sourceEmail = mail.source;
-                const sourceIp = mail.sourceIp;
+                bounce.bouncedRecipients.forEach(recipient => {
+                    const bouncedEmail = recipient.emailAddress;
+                    const timestamp = bounce.timestamp;
+                    const sourceEmail = mail.source;
+                    const sourceIp = mail.sourceIp;
 
-                const csvData = `"${bouncedEmail}","${timestamp}","${sourceEmail}","${sourceIp}"\n`;
-                fs.appendFileSync(csvFilePath, csvData);
+                    const csvData = `"${bouncedEmail}","${timestamp}","${sourceEmail}","${sourceIp}"\n`;
+                    fs.appendFileSync(csvFilePath, csvData);
+                });
 
                 console.log('Bounce data saved successfully.');
             } else {
@@ -62,10 +78,13 @@ app.post('/sns', (req, res) => {
 
         res.status(200).json({ message: 'Notification processed' });
     } catch (error) {
-        console.error('Error processing notification:', error);
+        console.error('Error processing notification:', error.message);
+        console.error('Stack Trace:', error.stack);
         res.status(500).json({ error: error.message });
     }
 });
+
+
 
 // Endpoint to download the CSV file
 app.get('/download', (req, res) => {
