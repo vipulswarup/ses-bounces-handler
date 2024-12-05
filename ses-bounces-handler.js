@@ -30,59 +30,49 @@ app.post('/sns', (req, res) => {
 
         let snsMessage;
 
-        if (req.is('text/plain')) {
-            // Log raw body for debugging
-            console.log('Raw SNS Message (text/plain):', req.body);
-            console.log("Received a text/plain request");
-            // Replace invalid single quotes and parse as JSON-like object
-            const sanitizedBody = req.body.replace(/([a-zA-Z0-9_]+):/g, '"$1":').replace(/'/g, '"');
-            console.log('Sanitized Body:', sanitizedBody);
-
-            snsMessage = JSON.parse(sanitizedBody); // Parses fixed JSON
-        } else if (req.is('application/json')) {
-            //console.log('Raw SNS Message (application/json):', req.body);
+        if (req.is('application/json')) {
             console.log("Received a application/json request");
             snsMessage = req.body; // Direct JSON parsing
+            console.log('Raw SNS Message (application/json):', snsMessage);
+
+            // Parse the Message string into a JSON object
+            try {
+                const messageContent = JSON.parse(snsMessage.Message);
+                console.log('Parsed Message Content:', messageContent);
+
+                console.log("****************************");
+                console.log("Notification Type:", messageContent.notificationType);
+                console.log("****************************");
+
+                if (messageContent.notificationType === 'Bounce') {
+                    const { bounce, mail } = messageContent;
+
+                    if (bounce && mail && Array.isArray(bounce.bouncedRecipients) && bounce.bouncedRecipients.length > 0) {
+                        bounce.bouncedRecipients.forEach(recipient => {
+                            const bouncedEmail = recipient.emailAddress;
+                            const timestamp = bounce.timestamp;
+                            const sourceEmail = mail.source;
+                            const sourceIp = mail.sourceIp;
+
+                            const csvData = `"${bouncedEmail}","${timestamp}","${sourceEmail}","${sourceIp}"\n`;
+                            fs.appendFileSync(csvFilePath, csvData);
+                        });
+
+                        console.log('Bounce data saved successfully.');
+                    } else {
+                        console.log('Invalid bounce or mail data.');
+                    }
+                } else {
+                    console.log('Notification type is not Bounce.');
+                }
+
+                res.status(200).json({ message: 'Notification processed' });
+            } catch (parseError) {
+                console.error("Error parsing Message JSON:", parseError);
+                res.status(500).json({ error: 'Failed to parse Message content' });
+            }
         } else {
             throw new Error('Unsupported Content-Type');
-        }
-
-        console.log('Parsed SNS Message:', snsMessage);
-
-        try {
-            const messageContent = snsMessage.Message;
-            console.log('Parsed Message Content:', messageContent);
-
-            console.log("****************************");
-            console.log("Notification Type:", messageContent.notificationType);
-            console.log("****************************");
-
-            if (messageContent.notificationType === 'Bounce') {
-                const { bounce, mail } = messageContent;
-
-                if (bounce && mail && Array.isArray(bounce.bouncedRecipients) && bounce.bouncedRecipients.length > 0) {
-                    bounce.bouncedRecipients.forEach(recipient => {
-                        const bouncedEmail = recipient.emailAddress;
-                        const timestamp = bounce.timestamp;
-                        const sourceEmail = mail.source;
-                        const sourceIp = mail.sourceIp;
-
-                        const csvData = `"${bouncedEmail}","${timestamp}","${sourceEmail}","${sourceIp}"\n`;
-                        fs.appendFileSync(csvFilePath, csvData);
-                    });
-
-                    console.log('Bounce data saved successfully.');
-                } else {
-                    console.log('Invalid bounce or mail data.');
-                }
-            } else {
-                console.log('Notification type is not Bounce.');
-            }
-
-            res.status(200).json({ message: 'Notification processed' });
-        } catch (parseError) {
-            console.error("Error parsing message content:", parseError);
-            res.status(500).json({ error: 'Failed to parse message content' });
         }
     } catch (error) {
         console.error('Error processing notification:', error.message);
@@ -102,21 +92,6 @@ app.get('/download', (req, res) => {
     }
 });
 
-// Confirm subscription
-app.get('/sns', async (req, res) => {
-    console.log("Inside the GET /sns block");
-    try {
-        const subscribeURL = req.query['SubscribeURL'];
-        if (subscribeURL) {
-            console.log('Subscription confirmation received. Visiting:', subscribeURL);
-            await axios.get(subscribeURL);
-        }
-        res.sendStatus(200);
-    } catch (error) {
-        console.error('Error processing subscription confirmation:', error);
-        res.status(500).send('Error processing request');
-    }
-});
 
 // Schedule email with bounced emails every midnight
 const transporter = nodemailer.createTransport({
