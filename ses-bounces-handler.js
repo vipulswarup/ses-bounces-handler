@@ -47,12 +47,12 @@ app.post('/sns', (req, res) => {
             throw new Error('Unsupported Content-Type');
         }
 
-        //console.log('Parsed SNS Message:', snsMessage);
+        console.log('Parsed SNS Message:', snsMessage);
 
         // Parse the `Message` field, which is a stringified JSON
         //const messageContent = JSON.parse(snsMessage.Message);
         messageContent = snsMessage.Message;
-        console.log('Parsed Message Content:', messageContent);
+        //console.log('Parsed Message Content:', messageContent);
 
         console.log("****************************");
         console.log("Notification Type: "+messageContent.notificationType);
