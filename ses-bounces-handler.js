@@ -32,8 +32,8 @@ app.post('/sns', (req, res) => {
 
         if (req.is('text/plain')) {
             // Log raw body for debugging
-            //console.log('Raw SNS Message (text/plain):', req.body);
-            console.log ("Received a text/plain request");
+            console.log('Raw SNS Message (text/plain):', req.body);
+            console.log("Received a text/plain request");
             // Replace invalid single quotes and parse as JSON-like object
             const sanitizedBody = req.body.replace(/([a-zA-Z0-9_]+):/g, '"$1":').replace(/'/g, '"');
             console.log('Sanitized Body:', sanitizedBody);
@@ -41,7 +41,7 @@ app.post('/sns', (req, res) => {
             snsMessage = JSON.parse(sanitizedBody); // Parses fixed JSON
         } else if (req.is('application/json')) {
             //console.log('Raw SNS Message (application/json):', req.body);
-            console.log ("Received a application/json request");
+            console.log("Received a application/json request");
             snsMessage = req.body; // Direct JSON parsing
         } else {
             throw new Error('Unsupported Content-Type');
@@ -49,38 +49,41 @@ app.post('/sns', (req, res) => {
 
         console.log('Parsed SNS Message:', snsMessage);
 
-        // Parse the `Message` field, which is a stringified JSON
-        //const messageContent = JSON.parse(snsMessage.Message);
-        messageContent = snsMessage.Message;
-        //console.log('Parsed Message Content:', messageContent);
+        try {
+            const messageContent = JSON.parse(snsMessage.Message);
+            console.log('Parsed Message Content:', messageContent);
 
-        console.log("****************************");
-        console.log("Notification Type: "+messageContent.notificationType);
-        console.log("****************************");
+            console.log("****************************");
+            console.log("Notification Type:", messageContent.notificationType);
+            console.log("****************************");
 
-        if (messageContent.notificationType === 'Bounce') {
-            const { bounce, mail } = messageContent;
+            if (messageContent.notificationType === 'Bounce') {
+                const { bounce, mail } = messageContent;
 
-            if (bounce && mail && Array.isArray(bounce.bouncedRecipients) && bounce.bouncedRecipients.length > 0) {
-                bounce.bouncedRecipients.forEach(recipient => {
-                    const bouncedEmail = recipient.emailAddress;
-                    const timestamp = bounce.timestamp;
-                    const sourceEmail = mail.source;
-                    const sourceIp = mail.sourceIp;
+                if (bounce && mail && Array.isArray(bounce.bouncedRecipients) && bounce.bouncedRecipients.length > 0) {
+                    bounce.bouncedRecipients.forEach(recipient => {
+                        const bouncedEmail = recipient.emailAddress;
+                        const timestamp = bounce.timestamp;
+                        const sourceEmail = mail.source;
+                        const sourceIp = mail.sourceIp;
 
-                    const csvData = `"${bouncedEmail}","${timestamp}","${sourceEmail}","${sourceIp}"\n`;
-                    fs.appendFileSync(csvFilePath, csvData);
-                });
+                        const csvData = `"${bouncedEmail}","${timestamp}","${sourceEmail}","${sourceIp}"\n`;
+                        fs.appendFileSync(csvFilePath, csvData);
+                    });
 
-                console.log('Bounce data saved successfully.');
+                    console.log('Bounce data saved successfully.');
+                } else {
+                    console.log('Invalid bounce or mail data.');
+                }
             } else {
-                console.log('Invalid bounce or mail data.');
+                console.log('Notification type is not Bounce.');
             }
-        } else {
-            console.log('Notification type is not Bounce.');
-        }
 
-        res.status(200).json({ message: 'Notification processed' });
+            res.status(200).json({ message: 'Notification processed' });
+        } catch (parseError) {
+            console.error("Error parsing message content:", parseError);
+            res.status(500).json({ error: 'Failed to parse message content' });
+        }
     } catch (error) {
         console.error('Error processing notification:', error.message);
         console.error('Stack Trace:', error.stack);
