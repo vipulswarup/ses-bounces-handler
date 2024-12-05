@@ -33,44 +33,61 @@ app.post('/sns', (req, res) => {
         if (req.is('application/json')) {
             console.log("Received a application/json request");
             snsMessage = req.body; // Direct JSON parsing
-            console.log('Raw SNS Message (application/json):', snsMessage);
+            console.log('Raw SNS Message (application/json):', JSON.stringify(snsMessage, null, 2));
 
-            // Parse the Message string into a JSON object
+            // Debug: Log the raw Message content
+            console.log('Raw Message:', snsMessage.Message);
+
+            // Try multiple parsing strategies
+            let messageContent;
             try {
-                const messageContent = JSON.parse(snsMessage.Message);
-                console.log('Parsed Message Content:', messageContent);
-
-                console.log("****************************");
-                console.log("Notification Type:", messageContent.notificationType);
-                console.log("****************************");
-
-                if (messageContent.notificationType === 'Bounce') {
-                    const { bounce, mail } = messageContent;
-
-                    if (bounce && mail && Array.isArray(bounce.bouncedRecipients) && bounce.bouncedRecipients.length > 0) {
-                        bounce.bouncedRecipients.forEach(recipient => {
-                            const bouncedEmail = recipient.emailAddress;
-                            const timestamp = bounce.timestamp;
-                            const sourceEmail = mail.source;
-                            const sourceIp = mail.sourceIp;
-
-                            const csvData = `"${bouncedEmail}","${timestamp}","${sourceEmail}","${sourceIp}"\n`;
-                            fs.appendFileSync(csvFilePath, csvData);
+                // First, try direct parsing
+                messageContent = JSON.parse(snsMessage.Message);
+            } catch (directParseError) {
+                try {
+                    // If that fails, try parsing after removing extra quotes and escaping
+                    messageContent = JSON.parse(snsMessage.Message.replace(/\\"/g, '"').replace(/^"|"$/g, ''));
+                } catch (escapedParseError) {
+                    // If both fail, try parsing the original message content
+                    try {
+                        messageContent = JSON.parse(JSON.parse(snsMessage.Message));
+                    } catch (nestedParseError) {
+                        console.error("Failed to parse Message content through multiple strategies:", {
+                            directParseError,
+                            escapedParseError,
+                            nestedParseError
                         });
-
-                        console.log('Bounce data saved successfully.');
-                    } else {
-                        console.log('Invalid bounce or mail data.');
+                        return res.status(400).json({ error: 'Unable to parse Message content', details: snsMessage.Message });
                     }
-                } else {
-                    console.log('Notification type is not Bounce.');
                 }
-
-                res.status(200).json({ message: 'Notification processed' });
-            } catch (parseError) {
-                console.error("Error parsing Message JSON:", parseError);
-                res.status(500).json({ error: 'Failed to parse Message content' });
             }
+
+            console.log('Parsed Message Content:', JSON.stringify(messageContent, null, 2));
+
+            // Rest of your existing processing logic...
+            if (messageContent.notificationType === 'Bounce') {
+                const { bounce, mail } = messageContent;
+
+                if (bounce && mail && Array.isArray(bounce.bouncedRecipients) && bounce.bouncedRecipients.length > 0) {
+                    bounce.bouncedRecipients.forEach(recipient => {
+                        const bouncedEmail = recipient.emailAddress;
+                        const timestamp = bounce.timestamp;
+                        const sourceEmail = mail.source;
+                        const sourceIp = mail.sourceIp;
+
+                        const csvData = `"${bouncedEmail}","${timestamp}","${sourceEmail}","${sourceIp}"\n`;
+                        fs.appendFileSync(csvFilePath, csvData);
+                    });
+
+                    console.log('Bounce data saved successfully.');
+                } else {
+                    console.log('Invalid bounce or mail data.');
+                }
+            } else {
+                console.log('Notification type is not Bounce.');
+            }
+
+            res.status(200).json({ message: 'Notification processed' });
         } else {
             throw new Error('Unsupported Content-Type');
         }
@@ -80,7 +97,6 @@ app.post('/sns', (req, res) => {
         res.status(500).json({ error: error.message });
     }
 });
-
 
 
 // Endpoint to download the CSV file
