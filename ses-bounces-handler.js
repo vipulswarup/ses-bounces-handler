@@ -52,7 +52,11 @@ app.post('/sns', (req, res) => {
         // Parse the `Message` field, which is a stringified JSON
         //const messageContent = JSON.parse(snsMessage.Message);
         messageContent = snsMessage.Message;
-        //console.log('Parsed Message Content:', messageContent);
+        console.log('Parsed Message Content:', messageContent);
+
+        console.log("****************************");
+        console.log("Notification Type: "+messageContent.notificationType);
+        console.log("****************************");
 
         if (messageContent.notificationType === 'Bounce') {
             const { bounce, mail } = messageContent;
