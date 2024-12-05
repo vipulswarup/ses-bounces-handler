@@ -13,6 +13,8 @@ const app = express();
 
 // Middleware for parsing JSON requests
 app.use(bodyParser.json());
+// Middleware for parsing text/plain requests
+app.use(bodyParser.text({ type: 'text/plain' }));
 
 // Define the path for the CSV file
 const csvFilePath = path.join(__dirname, 'bounces_detailed.csv');
@@ -25,14 +27,19 @@ if (!fs.existsSync(csvFilePath)) {
 // Handle SNS notifications
 app.post('/sns', (req, res) => {
     try {
-        console.log("Inside the post /sns block");
+        console.log("Inside the POST /sns block");
 
-        const message = req.body;
+        let message;
+        if (typeof req.body === 'string') {
+            message = JSON.parse(req.body); // Parse stringified JSON from SNS
+        } else {
+            message = req.body; // Use parsed JSON (e.g., when testing with Postman)
+        }
+
         console.log('Received message:', message);
 
         if (message.notificationType === 'Bounce') {
-            const bounce = message.bounce;
-            const mail = message.mail;
+            const { bounce, mail } = message;
 
             if (bounce && mail && Array.isArray(bounce.bouncedRecipients) && bounce.bouncedRecipients.length > 0) {
                 const bouncedEmail = bounce.bouncedRecipients[0].emailAddress;
@@ -40,7 +47,6 @@ app.post('/sns', (req, res) => {
                 const sourceEmail = mail.source;
                 const sourceIp = mail.sourceIp;
 
-                // Prepare CSV data, with fields wrapped in double quotes to handle special characters
                 const csvData = `"${bouncedEmail}","${timestamp}","${sourceEmail}","${sourceIp}"\n`;
                 fs.appendFileSync(csvFilePath, csvData);
 
@@ -97,6 +103,14 @@ const transporter = nodemailer.createTransport({
 cron.schedule('0 0 * * *', () => {
     if (fs.existsSync(csvFilePath)) {
         const csvContent = fs.readFileSync(csvFilePath, 'utf8');
+
+        // Check if the file contains data other than headers
+        const dataLines = csvContent.split('\n').slice(1).filter(line => line.trim() !== '');
+        if (dataLines.length === 0) {
+            console.log('No data to send. Skipping email.');
+            return;
+        }
+
         const mailOptions = {
             from: process.env.EMAIL_FROM,
             to: process.env.EMAIL_TO,
@@ -119,12 +133,17 @@ cron.schedule('0 0 * * *', () => {
         });
     }
 
+    // Backup the file before cleanup
+    const backupPath = `${csvFilePath}.${Date.now()}.backup`;
+    fs.copyFileSync(csvFilePath, backupPath);
+
     // Clean up old entries (older than 30 days)
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
     const lines = fs.readFileSync(csvFilePath, 'utf8').split('\n');
-    const filteredLines = lines.filter(line => {
+    const filteredLines = lines.filter((line, index) => {
+        if (index === 0) return true; // Preserve header
         const timestamp = line.split(',')[1];
         if (!timestamp) return false; // Handle potential empty lines
         const timestampDate = new Date(timestamp);
@@ -132,6 +151,8 @@ cron.schedule('0 0 * * *', () => {
     });
 
     fs.writeFileSync(csvFilePath, filteredLines.join('\n'));
+
+    console.log('Cleanup completed. Backup saved to:', backupPath);
 });
 
 // Start the server
