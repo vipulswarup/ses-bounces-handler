@@ -50,7 +50,7 @@ app.post('/sns', (req, res) => {
         console.log('Parsed SNS Message:', snsMessage);
 
         try {
-            const messageContent = JSON.parse(snsMessage.Message);
+            const messageContent = snsMessage.Message;
             console.log('Parsed Message Content:', messageContent);
 
             console.log("****************************");
