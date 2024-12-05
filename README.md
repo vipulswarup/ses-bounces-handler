@@ -1,11 +1,31 @@
 # ses-bounces-handler
-Simple HTTP Server to Handle API requests from Amazon SNS for SES Email Bounces
 
+This is a simple HTTP Server to Handle API requests from Amazon SNS for SES Email Bounces. It exposes an api endpoint for receiving HTTP requests from SNS, and stores the bounce details in a CSV file. This CSV file is emailed every night to specified email addresses, and it can also be accessed via an API end point.
+
+
+<h1>API Endpoints Available</h1>
+## API Endpoints
+
+| Endpoint | Method | Description |
+|---|---|---|
+| `/sns` | POST | Called by Amazon SNS to post the Subscribe and Bounce events |
+| `/download` | GET | Downlod the last 30 days of Bounce data in CSV format |
+
+
+
+
+<h1> Installing the Script using NPM </h1>
+Ensure you gave Node and NPM installed.
+Enter the directory where this script is cloned.
+```
 npm install -g yarn
 npm install
+```
+
+Make sure you update the file "email-details.conf" with your SMTP server details and recipient email address.
 
 
-
+<h1>Running the Server</h1>
 To run your script on a Linux server so it keeps running after you close the terminal, follow these steps:
 
 ### 1. **Use `nohup` to Run the Script**
