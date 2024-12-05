@@ -38,6 +38,8 @@ app.post('/sns', (req, res) => {
 
         console.log('Received message:', message);
 
+        //extract the Message block from the request
+        message=message.Message;
         if (message.notificationType === 'Bounce') {
             const { bounce, mail } = message;
 
