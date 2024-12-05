@@ -127,13 +127,31 @@ const transporter = nodemailer.createTransport({
 cron.schedule('0 0 * * *', () => {
     if (fs.existsSync(csvFilePath)) {
         const csvContent = fs.readFileSync(csvFilePath, 'utf8');
+        const lines = csvContent.split('\n');
+        
+        // Calculate 24 hours ago
+        const twentyFourHoursAgo = new Date();
+        twentyFourHoursAgo.setHours(twentyFourHoursAgo.getHours() - 24);
 
-        // Check if the file contains data other than headers
-        const dataLines = csvContent.split('\n').slice(1).filter(line => line.trim() !== '');
-        if (dataLines.length === 0) {
-            console.log('No data to send. Skipping email.');
+        // Filter lines from the last 24 hours
+        const filteredLines = lines.filter((line, index) => {
+            if (index === 0) return true; // Keep header
+            if (line.trim() === '') return false; // Skip empty lines
+            
+            const timestamp = line.split(',')[1].replace(/"/g, '');
+            const lineDate = new Date(timestamp);
+            
+            return lineDate > twentyFourHoursAgo;
+        });
+
+        // If no data in last 24 hours, skip email
+        if (filteredLines.length <= 1) {
+            console.log('No bounce data in the last 24 hours. Skipping email.');
             return;
         }
+
+        // Create CSV for the last 24 hours
+        const last24HoursCsv = filteredLines.join('\n');
 
         const mailOptions = {
             from: process.env.EMAIL_FROM,
@@ -142,8 +160,8 @@ cron.schedule('0 0 * * *', () => {
             text: 'Attached is the bounced email report for the last 24 hours.',
             attachments: [
                 {
-                    filename: 'bounces_detailed.csv',
-                    content: csvContent
+                    filename: `bounces_${new Date().toISOString().split('T')[0]}.csv`,
+                    content: last24HoursCsv
                 }
             ]
         };
@@ -157,7 +175,7 @@ cron.schedule('0 0 * * *', () => {
         });
     }
 
-    // Backup the file before cleanup
+    // Existing backup and cleanup logic remains the same
     const backupPath = `${csvFilePath}.${Date.now()}.backup`;
     fs.copyFileSync(csvFilePath, backupPath);
 
@@ -165,16 +183,16 @@ cron.schedule('0 0 * * *', () => {
     const thirtyDaysAgo = new Date();
     thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
 
-    const lines = fs.readFileSync(csvFilePath, 'utf8').split('\n');
-    const filteredLines = lines.filter((line, index) => {
+    const allLines = fs.readFileSync(csvFilePath, 'utf8').split('\n');
+    const retainedLines = allLines.filter((line, index) => {
         if (index === 0) return true; // Preserve header
-        const timestamp = line.split(',')[1];
+        const timestamp = line.split(',')[1].replace(/"/g, '');
         if (!timestamp) return false; // Handle potential empty lines
         const timestampDate = new Date(timestamp);
         return timestampDate > thirtyDaysAgo;
     });
 
-    fs.writeFileSync(csvFilePath, filteredLines.join('\n'));
+    fs.writeFileSync(csvFilePath, retainedLines.join('\n'));
 
     console.log('Cleanup completed. Backup saved to:', backupPath);
 });
