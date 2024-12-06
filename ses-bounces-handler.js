@@ -106,18 +106,29 @@ app.post('/sns', (req, res) => {
 
 // Endpoint to download the CSV file
 app.get('/download', (req, res) => {
-    if (fs.existsSync(csvFilePath)) {
-        res.download(csvFilePath);
-    } else {
-        res.status(404).json({ error: 'CSV file not found' });
+    try {
+        if (fs.existsSync(csvFilePath)) {
+            // Use absolute path to ensure correct file referencing
+            res.download(path.resolve(csvFilePath), 'bounces.csv', (err) => {
+                if (err) {
+                    console.error('Download error:', err);
+                    res.status(500).send('Could not download the file');
+                }
+            });
+        } else {
+            res.status(404).json({ error: 'CSV file not found' });
+        }
+    } catch (error) {
+        console.error('Error in download endpoint:', error);
+        res.status(500).json({ error: 'Internal server error' });
     }
 });
 
-
-// Schedule email with bounced emails every midnight
+// Ensure you have these environment variables set in your .env file
 const transporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST,
-    port: process.env.SMTP_PORT,
+    host: process.env.SMTP_HOST,     // e.g., 'smtp.gmail.com'
+    port: parseInt(process.env.SMTP_PORT, 10),  // e.g., 587 or 465
+    secure: process.env.SMTP_SECURE === 'true', // true for 465, false for 587
     auth: {
         user: process.env.SMTP_USER,
         pass: process.env.SMTP_PASSWORD
