@@ -23,7 +23,7 @@ npm install -g yarn
 npm install
 ```
 
-Make sure you update the file "email-details.conf" with your SMTP server details and recipient email address.
+Make sure you update the file ".env" with your SMTP server details and recipient email address.
 
 
 <h1>Running the Server</h1>
