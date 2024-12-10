@@ -7,7 +7,10 @@ const cron = require('node-cron');
 const dotenv = require('dotenv');
 const axios = require('axios');
 
-dotenv.config({ path: './email-details.config' });
+dotenv.config(); // This will look for a .env file in the project root
+console.log('SMTP Host:', process.env.SMTP_HOST);
+console.log('SMTP Port:', process.env.SMTP_PORT);
+console.log('SMTP User:', process.env.SMTP_USER);
 
 const app = express();
 
@@ -140,11 +143,11 @@ cron.schedule('0 0 * * *', () => {
         const csvContent = fs.readFileSync(csvFilePath, 'utf8');
         const lines = csvContent.split('\n');
         
-        // Calculate 24 hours ago
+        // Calculate 24 hours ago for email report
         const twentyFourHoursAgo = new Date();
         twentyFourHoursAgo.setHours(twentyFourHoursAgo.getHours() - 24);
 
-        // Filter lines from the last 24 hours
+        // Filter lines from the last 24 hours for email report
         const filteredLines = lines.filter((line, index) => {
             if (index === 0) return true; // Keep header
             if (line.trim() === '') return false; // Skip empty lines
@@ -186,24 +189,41 @@ cron.schedule('0 0 * * *', () => {
         });
     }
 
-    // Existing backup and cleanup logic remains the same
+    // Create backup with timestamp
     const backupPath = `${csvFilePath}.${Date.now()}.backup`;
     fs.copyFileSync(csvFilePath, backupPath);
 
-    // Clean up old entries (older than 30 days)
-    const thirtyDaysAgo = new Date();
-    thirtyDaysAgo.setDate(thirtyDaysAgo.getDate() - 30);
+    // Clean up old entries and backups (older than 7 days)
+    const sevenDaysAgo = new Date();
+    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
 
+    // Clean up CSV entries
     const allLines = fs.readFileSync(csvFilePath, 'utf8').split('\n');
     const retainedLines = allLines.filter((line, index) => {
         if (index === 0) return true; // Preserve header
         const timestamp = line.split(',')[1].replace(/"/g, '');
         if (!timestamp) return false; // Handle potential empty lines
         const timestampDate = new Date(timestamp);
-        return timestampDate > thirtyDaysAgo;
+        return timestampDate > sevenDaysAgo;
     });
 
+    // Write back retained lines to CSV
     fs.writeFileSync(csvFilePath, retainedLines.join('\n'));
+
+    // Clean up old backup files
+    const backupDir = path.dirname(csvFilePath);
+    fs.readdirSync(backupDir)
+        .filter(file => file.startsWith(path.basename(csvFilePath)) && file.endsWith('.backup'))
+        .forEach(file => {
+            const fullPath = path.join(backupDir, file);
+            const fileStats = fs.statSync(fullPath);
+            const fileDate = new Date(fileStats.mtime);
+            
+            if (fileDate < sevenDaysAgo) {
+                fs.unlinkSync(fullPath);
+                console.log(`Deleted old backup: ${file}`);
+            }
+        });
 
     console.log('Cleanup completed. Backup saved to:', backupPath);
 });
