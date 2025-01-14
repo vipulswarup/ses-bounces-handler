@@ -2,18 +2,26 @@
   "name": "sns-bounce-processor",
   "version": "1.0.0",
   "description": "Processes SNS notifications for bounced emails and sends daily reports.",
-  "main": "index.js",
+  "main": "ses-bounces-handler.js",
   "scripts": {
-    "start": "node index.js"
+    "start": "node ses-bounces-handler.js",
+    "dev": "nodemon ses-bounces-handler.js"
   },
   "dependencies": {
+    "aws-sns-signature-validator": "^0.1.3",
     "body-parser": "^1.20.2",
-    "express": "^4.18.2",
-    "fs": "0.0.1-security",
-    "node-cron": "^3.0.2",
-    "nodemailer": "^6.9.4",
-    "path": "^0.12.7",
+    "csv-parse": "^5.5.3",
+    "csv-writer": "^1.6.0",
     "dotenv": "^16.4.7",
-    "axios": "1.7.9"
+    "express": "^4.18.2",
+    "express-rate-limit": "^7.1.5",
+    "node-cron": "^3.0.2",
+    "nodemailer": "^6.9.4"
+  },
+  "devDependencies": {
+    "nodemon": "^3.0.3"
+  },
+  "engines": {
+    "node": ">=14.0.0"
   }
 }
