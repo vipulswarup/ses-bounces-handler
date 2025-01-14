@@ -1,235 +1,308 @@
 const express = require('express');
-const fs = require('fs');
+const fs = require('fs').promises;  // Use promise-based fs
 const path = require('path');
 const bodyParser = require('body-parser');
 const nodemailer = require('nodemailer');
 const cron = require('node-cron');
 const dotenv = require('dotenv');
-const axios = require('axios');
+const rateLimit = require('express-rate-limit');
+const csv = require('csv-parse/sync');
+const createCsvStringifier = require('csv-writer').createObjectCsvStringifier;
+const { validateSNSMessage } = require('aws-sns-signature-validator');
 
-dotenv.config(); // This will look for a .env file in the project root
-console.log('SMTP Host:', process.env.SMTP_HOST);
-console.log('SMTP Port:', process.env.SMTP_PORT);
-console.log('SMTP User:', process.env.SMTP_USER);
+dotenv.config();
+
+// Don't log sensitive information
+console.log('Server starting...');
 
 const app = express();
 
-// Middleware for parsing JSON requests
-app.use(bodyParser.json());
-// Middleware for parsing text/plain requests
-app.use(bodyParser.text({ type: 'text/plain' }));
-
-// Define the path for the CSV file
-const csvFilePath = path.join(__dirname, 'bounces_detailed.csv');
-
-// Create the CSV file with headers if it doesn't exist
-if (!fs.existsSync(csvFilePath)) {
-    fs.writeFileSync(csvFilePath, 'Bounced Email,Timestamp,Source Email,Source IP\n');
-}
-
-app.post('/sns', (req, res) => {
-    try {
-        console.log("Inside the POST /sns block");
-
-        let snsMessage;
-
-        if (req.is('application/json')) {
-            console.log("Received a application/json request");
-            snsMessage = req.body; // Direct JSON parsing
-            //console.log('Raw SNS Message (application/json):', JSON.stringify(snsMessage, null, 2));
-
-            // Debug: Log the raw Message content
-            //console.log('Raw Message:', snsMessage.Message);
-
-            // Try multiple parsing strategies
-            let messageContent;
-            try {
-                // First, try direct parsing
-                messageContent = JSON.parse(snsMessage.Message);
-                console.log('Parsed Message Object:', messageContent);
-            } catch (directParseError) {
-                try {
-                    // If that fails, try parsing after removing extra quotes and escaping
-                    messageContent = JSON.parse(snsMessage.Message.replace(/\\"/g, '"').replace(/^"|"$/g, ''));
-                    console.log('Parsed Message Object with Replace:', messageContent);
-                } catch (escapedParseError) {
-                    // If both fail, try parsing the original message content
-                    try {
-                        messageContent = JSON.parse(JSON.parse(snsMessage.Message));
-                        console.log('Double Parsed Message Object:', messageContent);
-                    } catch (nestedParseError) {
-                        console.error("Failed to parse Message content through multiple strategies:", {
-                            directParseError,
-                            escapedParseError,
-                            nestedParseError
-                        });
-                        return res.status(400).json({ error: 'Unable to parse Message content', details: snsMessage.Message });
-                    }
-                }
-            }
-
-            //console.log('Parsed Message Content:', JSON.stringify(messageContent, null, 2));
-
-            console.log("Notification Type : "+messageContent.notificationType);
-
-            // Rest of your existing processing logic...
-            if (messageContent.notificationType === 'Bounce') {
-                const { bounce, mail } = messageContent;
-
-                if (bounce && mail && Array.isArray(bounce.bouncedRecipients) && bounce.bouncedRecipients.length > 0) {
-                    bounce.bouncedRecipients.forEach(recipient => {
-                        const bouncedEmail = recipient.emailAddress;
-                        const timestamp = bounce.timestamp;
-                        const sourceEmail = mail.source;
-                        const sourceIp = mail.sourceIp;
-
-                        const csvData = `"${bouncedEmail}","${timestamp}","${sourceEmail}","${sourceIp}"\n`;
-                        fs.appendFileSync(csvFilePath, csvData);
-                    });
-
-                    console.log('Bounce data saved successfully.');
-                } else {
-                    console.log('Invalid bounce or mail data.');
-                }
-            } else {
-                console.log('Notification type is not Bounce.');
-            }
-
-            res.status(200).json({ message: 'Notification processed' });
-        } else {
-            throw new Error('Unsupported Content-Type');
-        }
-    } catch (error) {
-        console.error('Error processing notification:', error.message);
-        console.error('Stack Trace:', error.stack);
-        res.status(500).json({ error: error.message });
-    }
+// Add rate limiting
+const limiter = rateLimit({
+    windowMs: 15 * 60 * 1000, // 15 minutes
+    max: 100 // limit each IP to 100 requests per windowMs
 });
 
+app.use(limiter);
+app.use(bodyParser.json());
 
-// Endpoint to download the CSV file
-app.get('/download', (req, res) => {
+// CSV Configuration
+const csvFilePath = path.join(__dirname, 'data', 'bounces_detailed.csv');
+const csvStringifier = createCsvStringifier({
+    header: [
+        { id: 'email', title: 'Bounced Email' },
+        { id: 'timestamp', title: 'Timestamp' },
+        { id: 'sourceEmail', title: 'Source Email' },
+        { id: 'sourceIp', title: 'Source IP' }
+    ]
+});
+
+// Initialize CSV file
+async function initializeCsvFile() {
     try {
-        if (fs.existsSync(csvFilePath)) {
-            // Use absolute path to ensure correct file referencing
-            res.download(path.resolve(csvFilePath), 'bounces.csv', (err) => {
-                if (err) {
-                    console.error('Download error:', err);
-                    res.status(500).send('Could not download the file');
-                }
-            });
-        } else {
-            res.status(404).json({ error: 'CSV file not found' });
+        await fs.mkdir(path.dirname(csvFilePath), { recursive: true });
+        const fileExists = await fs.access(csvFilePath).then(() => true).catch(() => false);
+        
+        if (!fileExists) {
+            await fs.writeFile(csvFilePath, csvStringifier.getHeaderString());
+            console.log('CSV file initialized successfully');
         }
     } catch (error) {
-        console.error('Error in download endpoint:', error);
+        console.error('Error initializing CSV file:', error);
+        process.exit(1);
+    }
+}
+
+// Validate and process SNS message
+async function processSNSMessage(message) {
+    if (!validateSNSMessage(message)) {
+        throw new Error('Invalid SNS message signature');
+    }
+
+    const messageContent = JSON.parse(message.Message);
+    
+    if (messageContent.notificationType !== 'Bounce') {
+        return null;
+    }
+
+    return messageContent;
+}
+
+// Safe CSV write operation with locking
+async function appendToCsv(data) {
+    const lockFile = `${csvFilePath}.lock`;
+    try {
+        // Acquire lock
+        await fs.writeFile(lockFile, '');
+        
+        // Write data
+        const csvString = csvStringifier.stringifyRecords(data);
+        await fs.appendFile(csvFilePath, csvString);
+        
+        // Release lock
+        await fs.unlink(lockFile);
+    } catch (error) {
+        // Ensure lock is released even if write fails
+        try {
+            await fs.unlink(lockFile);
+        } catch (unlinkError) {
+            console.error('Error releasing lock:', unlinkError);
+        }
+        throw error;
+    }
+}
+
+// SNS endpoint
+app.post('/sns', async (req, res) => {
+    try {
+        const messageContent = await processSNSMessage(req.body);
+        if (!messageContent) {
+            return res.status(200).json({ message: 'Non-bounce notification ignored' });
+        }
+
+        const { bounce, mail } = messageContent;
+        
+        if (!bounce?.bouncedRecipients?.length || !mail) {
+            throw new Error('Invalid bounce data structure');
+        }
+
+        const bounceRecords = bounce.bouncedRecipients.map(recipient => ({
+            email: recipient.emailAddress,
+            timestamp: bounce.timestamp,
+            sourceEmail: mail.source,
+            sourceIp: mail.sourceIp
+        }));
+
+        await appendToCsv(bounceRecords);
+        res.status(200).json({ message: 'Bounce processed successfully' });
+    } catch (error) {
+        console.error('Error processing SNS notification:', error);
         res.status(500).json({ error: 'Internal server error' });
     }
 });
 
-// Ensure you have these environment variables set in your .env file
-const transporter = nodemailer.createTransport({
-    host: process.env.SMTP_HOST,     // e.g., 'smtp.gmail.com'
-    port: parseInt(process.env.SMTP_PORT, 10),  // e.g., 587 or 465
-    secure: process.env.SMTP_SECURE === 'true', // true for 465, false for 587
-    auth: {
-        user: process.env.SMTP_USER,
-        pass: process.env.SMTP_PASSWORD
+// Protected download endpoint
+app.get('/download', authenticateRequest, async (req, res) => {
+    try {
+        await fs.access(csvFilePath);
+        res.download(csvFilePath, 'bounces.csv');
+    } catch (error) {
+        res.status(404).json({ error: 'CSV file not found' });
     }
 });
 
-cron.schedule('0 0 * * *', () => {
-    if (fs.existsSync(csvFilePath)) {
-        const csvContent = fs.readFileSync(csvFilePath, 'utf8');
-        const lines = csvContent.split('\n');
+// Email configuration with retry logic
+const createTransporter = async () => {
+    const transporter = nodemailer.createTransport({
+        host: process.env.SMTP_HOST,
+        port: parseInt(process.env.SMTP_PORT, 10),
+        secure: process.env.SMTP_SECURE === 'true',
+        auth: {
+            user: process.env.SMTP_USER,
+            pass: process.env.SMTP_PASSWORD
+        }
+    });
+
+    try {
+        await transporter.verify();
+        return transporter;
+    } catch (error) {
+        console.error('Failed to create mail transporter:', error);
+        throw error;
+    }
+};
+
+// Improved cron job with backup management
+cron.schedule('0 0 * * *', async () => {
+    try {
+        const backupDir = path.join(__dirname, 'backups', new Date().toISOString().split('T')[0]);
+        await fs.mkdir(backupDir, { recursive: true });
+
+        // Create compressed backup
+        const backupPath = path.join(backupDir, `bounces_${Date.now()}.csv.gz`);
+        await compressAndSaveFile(csvFilePath, backupPath);
+
+        // Send email report
+        const transporter = await createTransporter();
+        await sendDailyReport(transporter);
+
+        // Clean up old data
+        await cleanupOldData();
+    } catch (error) {
+        console.error('Error in cron job:', error);
+    }
+});
+
+// Utility function to compress and save file
+async function compressAndSaveFile(sourcePath, destPath) {
+    const zlib = require('zlib');
+    const { pipeline } = require('stream/promises');
+    
+    try {
+        const sourceStream = fs.createReadStream(sourcePath);
+        const destStream = fs.createWriteStream(destPath);
+        const gzip = zlib.createGzip();
         
-        // Calculate 24 hours ago for email report
+        await pipeline(sourceStream, gzip, destStream);
+        console.log(`Successfully compressed and saved to ${destPath}`);
+    } catch (error) {
+        console.error('Error compressing file:', error);
+        throw error;
+    }
+}
+
+// Function to send daily report
+async function sendDailyReport(transporter) {
+    try {
+        // Read and filter CSV data for last 24 hours
+        const csvContent = await fs.readFile(csvFilePath, 'utf8');
+        const records = await csv.parse(csvContent, {
+            columns: true,
+            skip_empty_lines: true
+        });
+
         const twentyFourHoursAgo = new Date();
         twentyFourHoursAgo.setHours(twentyFourHoursAgo.getHours() - 24);
 
-        // Filter lines from the last 24 hours for email report
-        const filteredLines = lines.filter((line, index) => {
-            if (index === 0) return true; // Keep header
-            if (line.trim() === '') return false; // Skip empty lines
-            
-            const timestamp = line.split(',')[1].replace(/"/g, '');
-            const lineDate = new Date(timestamp);
-            
-            return lineDate > twentyFourHoursAgo;
+        const recentRecords = records.filter(record => {
+            const recordDate = new Date(record['Timestamp']);
+            return recordDate > twentyFourHoursAgo;
         });
 
-        // If no data in last 24 hours, skip email
-        if (filteredLines.length <= 1) {
-            console.log('No bounce data in the last 24 hours. Skipping email.');
+        if (recentRecords.length === 0) {
+            console.log('No bounce data in the last 24 hours');
             return;
         }
 
-        // Create CSV for the last 24 hours
-        const last24HoursCsv = filteredLines.join('\n');
-
+        // Create CSV string for attachment
+        const csvString = csvStringifier.stringifyRecords(recentRecords);
+        
+        // Configure email
         const mailOptions = {
             from: process.env.EMAIL_FROM,
             to: process.env.EMAIL_TO,
-            subject: 'Daily Bounced Emails Report',
-            text: 'Attached is the bounced email report for the last 24 hours.',
-            attachments: [
-                {
-                    filename: `bounces_${new Date().toISOString().split('T')[0]}.csv`,
-                    content: last24HoursCsv
-                }
-            ]
+            subject: `Daily Bounced Emails Report - ${new Date().toISOString().split('T')[0]}`,
+            text: `Attached is the bounced email report for the last 24 hours.\nTotal bounces: ${recentRecords.length}`,
+            attachments: [{
+                filename: `bounces_${new Date().toISOString().split('T')[0]}.csv`,
+                content: csvString
+            }]
         };
 
-        transporter.sendMail(mailOptions, (error, info) => {
-            if (error) {
-                console.error('Error sending email:', error);
-            } else {
-                console.log('Email sent:', info.response);
+        // Send with retry logic
+        let retries = 3;
+        while (retries > 0) {
+            try {
+                await transporter.sendMail(mailOptions);
+                console.log('Daily report email sent successfully');
+                return;
+            } catch (error) {
+                retries--;
+                if (retries === 0) throw error;
+                console.log(`Email send failed, ${retries} retries remaining`);
+                await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds before retry
             }
-        });
+        }
+    } catch (error) {
+        console.error('Error sending daily report:', error);
+        throw error;
     }
+}
 
-    // Create backup with timestamp
-    const backupPath = `${csvFilePath}.${Date.now()}.backup`;
-    fs.copyFileSync(csvFilePath, backupPath);
+// Function to clean up old data
+async function cleanupOldData() {
+    try {
+        const retentionDays = process.env.DATA_RETENTION_DAYS || 7;
+        const cutoffDate = new Date();
+        cutoffDate.setDate(cutoffDate.getDate() - retentionDays);
 
-    // Clean up old entries and backups (older than 7 days)
-    const sevenDaysAgo = new Date();
-    sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-
-    // Clean up CSV entries
-    const allLines = fs.readFileSync(csvFilePath, 'utf8').split('\n');
-    const retainedLines = allLines.filter((line, index) => {
-        if (index === 0) return true; // Preserve header
-        const timestamp = line.split(',')[1].replace(/"/g, '');
-        if (!timestamp) return false; // Handle potential empty lines
-        const timestampDate = new Date(timestamp);
-        return timestampDate > sevenDaysAgo;
-    });
-
-    // Write back retained lines to CSV
-    fs.writeFileSync(csvFilePath, retainedLines.join('\n'));
-
-    // Clean up old backup files
-    const backupDir = path.dirname(csvFilePath);
-    fs.readdirSync(backupDir)
-        .filter(file => file.startsWith(path.basename(csvFilePath)) && file.endsWith('.backup'))
-        .forEach(file => {
-            const fullPath = path.join(backupDir, file);
-            const fileStats = fs.statSync(fullPath);
-            const fileDate = new Date(fileStats.mtime);
+        // Clean up old backups
+        const backupsDir = path.join(__dirname, 'backups');
+        const backupDirs = await fs.readdir(backupsDir);
+        
+        for (const dir of backupDirs) {
+            const dirPath = path.join(backupsDir, dir);
+            const dirStat = await fs.stat(dirPath);
             
-            if (fileDate < sevenDaysAgo) {
-                fs.unlinkSync(fullPath);
-                console.log(`Deleted old backup: ${file}`);
+            if (dirStat.isDirectory() && new Date(dir) < cutoffDate) {
+                await fs.rm(dirPath, { recursive: true });
+                console.log(`Removed old backup directory: ${dir}`);
             }
+        }
+
+        // Clean up main CSV file
+        const csvContent = await fs.readFile(csvFilePath, 'utf8');
+        const records = await csv.parse(csvContent, {
+            columns: true,
+            skip_empty_lines: true
         });
 
-    console.log('Cleanup completed. Backup saved to:', backupPath);
+        const recentRecords = records.filter(record => {
+            const recordDate = new Date(record['Timestamp']);
+            return recordDate > cutoffDate;
+        });
+
+        // Write back recent records only
+        const csvString = csvStringifier.stringifyRecords(recentRecords);
+        await fs.writeFile(csvFilePath, csvStringifier.getHeaderString() + csvString);
+        
+        console.log('Data cleanup completed successfully');
+    } catch (error) {
+        console.error('Error cleaning up old data:', error);
+        throw error;
+    }
+}
+    }
 });
 
-// Start the server
-const PORT = 5001;
-app.listen(PORT, () => {
+// Start server with proper error handling
+const PORT = process.env.PORT || 5001;
+app.listen(PORT, '0.0.0.0', () => {
     console.log(`Server running on http://0.0.0.0:${PORT}`);
+}).on('error', (error) => {
+    console.error('Failed to start server:', error);
+    process.exit(1);
 });
+
+// Initialize on startup
+initializeCsvFile();
