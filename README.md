@@ -1,93 +1,178 @@
-# ses-bounces-handler
+# SES Bounces Handler
 
-This is a simple HTTP Server to Handle API requests from Amazon SNS for SES Email Bounces. It exposes an api endpoint for receiving HTTP requests from SNS, and stores the bounce details in a CSV file. This CSV file is emailed every night to specified email addresses, and it can also be accessed via an API end point.
+This is a Node.js server that handles Amazon Simple Email Service (SES) bounce notifications via Amazon SNS. It stores bounce details in a CSV file, sends daily email reports, and provides an API endpoint for downloading bounce data.
 
+## Features
 
-<h1>API Endpoints Available</h1>
+- Processes SES bounce notifications from SNS
+- Stores bounce data in CSV format
+- Sends daily email reports with bounce statistics
+- Maintains compressed backups of bounce data
+- Automatically cleans up old data based on retention policy
+- Rate limiting for API endpoints
+- File locking for concurrent write operations
+
 ## API Endpoints
 
 | Endpoint | Method | Description |
-|---|---|---|
-| `/sns` | POST | Called by Amazon SNS to post the Subscribe and Bounce events |
-| `/download` | GET | Downlod the last 30 days of Bounce data in CSV format |
+|----------|---------|-------------|
+| `/sns` | POST | Receives bounce notifications from Amazon SNS |
+| `/download` | GET | Downloads bounce data in CSV format |
 
+## Prerequisites
 
+- Node.js (>= 14.0.0)
+- PM2 (for process management)
+- SMTP server access for sending reports
 
+## Installation
 
-<h1> Installing the Script using NPM </h1>
-Ensure you have Node and NPM installed.
-Enter the directory where this script is cloned.
-
+1. Clone the repository:
 ```bash
-npm install -g yarn
+git clone <repository-url>
+cd ses-bounces-handler
+```
+
+2. Install dependencies:
+```bash
 npm install
 ```
 
-Make sure you update the file ".env" with your SMTP server details and recipient email address.
-
-
-<h1>Running the Server</h1>
-To run your script on a Linux server so it keeps running after you close the terminal, follow these steps:
-
-### 1. **Use `nohup` to Run the Script**
-`nohup` allows the process to continue running in the background even after the terminal is closed.
-
-Run the script as follows:
+3. Create required directories:
 ```bash
-nohup node path/to/your/script.js > output.log 2> error.log &
+mkdir -p data backups
 ```
 
-- **`output.log`**: Captures the standard output of your script.
-- **`error.log`**: Captures the standard error (errors and logs sent via `console.error`).
-- **`&`**: Runs the process in the background.
-
-### 2. **View the Logs**
-You can monitor the logs at any time:
-- Standard output: `tail -f output.log`
-- Errors: `tail -f error.log`
-
-### 3. **Stop the Process**
-To stop the script, find its process ID (PID) using:
+4. Create .env file:
 ```bash
-ps aux | grep node
-```
-Then kill the process:
-```bash
-kill <PID>
+cat > .env << EOF
+PORT=5001
+SMTP_HOST=your_smtp_host
+SMTP_PORT=your_smtp_port
+SMTP_USER=your_smtp_user
+SMTP_PASSWORD=your_smtp_password
+SMTP_SECURE=true
+EMAIL_FROM=sender@example.com
+EMAIL_TO=recipient@example.com
+DATA_RETENTION_DAYS=7
+NODE_ENV=production
+EOF
 ```
 
-### 4. **Alternative: Use a Process Manager (Optional)**
-Using a process manager like **PM2** or **systemd** provides better management for scripts. PM2 is particularly user-friendly for Node.js applications:
+## Running with PM2
 
-#### Install PM2:
+1. Install PM2 globally if not already installed:
 ```bash
 npm install -g pm2
 ```
 
-#### Start the Script:
+2. Start the service:
 ```bash
-pm2 start path/to/your/script.js --name sns-ses-handler
+pm2 start ses-bounces-handler.js --name sns-ses-handler
 ```
 
-#### Check Logs:
+3. Monitor the service:
 ```bash
+# View logs
 pm2 logs sns-ses-handler
+
+# Monitor process
+pm2 monit sns-ses-handler
+
+# View status
+pm2 status
 ```
 
-#### Ensure Auto-Restart:
-Enable PM2 to start the script automatically on server boot:
+4. Configure auto-restart on system boot:
 ```bash
 pm2 startup
 pm2 save
 ```
 
-This approach ensures reliability and ease of monitoring. Let me know if you want detailed steps for setting up PM2 or using another method.
+5. Common PM2 commands:
+```bash
+# Restart service
+pm2 restart sns-ses-handler
 
+# Stop service
+pm2 stop sns-ses-handler
 
-<h1>Important - SNS has to be setup to send JSON objects </h1>
-<ol>
-<li> In the Amazon SNS edit your subscription, and expand the "Delivery Policy HTTP/S - Optional" Section.
-<li> Uncheck "Use Default Delivery Policy"
-<li> Change Content  Type to : application/json
-<li> Save
-</ol>
+# Delete service
+pm2 delete sns-ses-handler
+```
+
+## Amazon SNS Configuration
+
+1. In your SNS topic subscription:
+   - Go to the subscription settings
+   - Expand "Subscription details"
+   - Click "Edit"
+
+2. Configure delivery settings:
+   - Under "Delivery policy (HTTP/S)" section:
+   - Uncheck "Use default delivery policy"
+   - Set "Content type" to: `application/json`
+   - Save changes
+
+3. Verify the endpoint:
+   - SNS will send a subscription confirmation request
+   - The server will automatically handle the confirmation
+
+## Environment Variables
+
+| Variable | Description | Example |
+|----------|-------------|---------|
+| PORT | Server port | 5001 |
+| SMTP_HOST | SMTP server hostname | smtp.gmail.com |
+| SMTP_PORT | SMTP server port | 587 |
+| SMTP_USER | SMTP username | user@example.com |
+| SMTP_PASSWORD | SMTP password | your_password |
+| SMTP_SECURE | Use SSL/TLS | true |
+| EMAIL_FROM | Sender email address | sender@example.com |
+| EMAIL_TO | Report recipient(s) | recipient@example.com |
+| DATA_RETENTION_DAYS | Days to keep bounce data | 7 |
+| NODE_ENV | Environment (development/production) | production |
+
+## Data Management
+
+- Bounce data is stored in `data/bounces_detailed.csv`
+- Daily backups are created in `backups/YYYY-MM-DD/`
+- Backups are compressed using gzip
+- Data older than DATA_RETENTION_DAYS is automatically removed
+- Daily email reports include only last 24 hours of bounce data
+
+## Troubleshooting
+
+1. Check PM2 logs:
+```bash
+pm2 logs sns-ses-handler --lines 100
+```
+
+2. Verify service status:
+```bash
+pm2 status
+```
+
+3. Check system logs:
+```bash
+tail -f /var/log/syslog | grep sns-ses-handler
+```
+
+4. Common issues:
+   - SMTP connection failures: Check credentials and firewall settings
+   - Permission errors: Ensure proper directory permissions
+   - SNS verification failures: Verify SNS topic configuration
+
+## Security Considerations
+
+- The `/download` endpoint is publicly accessible; consider adding authentication
+- SMTP credentials are stored in .env file; ensure proper file permissions
+- SNS message verification is implemented but should be enhanced for production
+- Rate limiting is enabled to prevent abuse
+
+## Maintenance
+
+- Monitor disk space usage
+- Regularly check email delivery success
+- Review bounce patterns for potential issues
+- Update dependencies periodically for security patches
