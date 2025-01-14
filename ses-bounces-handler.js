@@ -238,18 +238,42 @@ function verifySignature(message) {
 
 // Validate and process SNS message
 async function processSNSMessage(message) {
-    // Verify the SNS message signature
-    if (!verifySignature(message)) {
-        throw new Error('Invalid SNS message signature');
-    }
+    try {
+        // Verify the SNS message signature
+        if (!verifySignature(message)) {
+            throw new Error('Invalid SNS message signature');
+        }
 
-    const messageContent = JSON.parse(message.Message);
-    
-    if (messageContent.notificationType !== 'Bounce') {
-        return null;
-    }
+        let messageContent;
+        
+        // Handle case where Message is already an object
+        if (typeof message.Message === 'object') {
+            messageContent = message.Message;
+        } else {
+            // Try parsing the Message if it's a string
+            try {
+                messageContent = JSON.parse(message.Message);
+            } catch (parseError) {
+                console.error('Error parsing Message:', parseError);
+                console.log('Raw Message content:', message.Message);
+                throw new Error('Invalid Message format');
+            }
+        }
 
-    return messageContent;
+        // Log the parsed content for debugging
+        console.log('Parsed message content:', JSON.stringify(messageContent, null, 2));
+        
+        if (messageContent.notificationType !== 'Bounce') {
+            console.log('Not a bounce notification:', messageContent.notificationType);
+            return null;
+        }
+
+        return messageContent;
+    } catch (error) {
+        console.error('Error in processSNSMessage:', error);
+        console.log('Raw message:', JSON.stringify(message, null, 2));
+        throw error;
+    }
 }
 
 // Safe CSV write operation with locking
@@ -280,6 +304,7 @@ async function appendToCsv(data) {
 app.post('/sns', async (req, res) => {
     try {
         console.log('Received SNS notification');
+        console.log('Request body:', JSON.stringify(req.body, null, 2));
         const messageContent = await processSNSMessage(req.body);
         if (!messageContent) {
             return res.status(200).json({ message: 'Non-bounce notification ignored' });
