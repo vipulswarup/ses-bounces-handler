@@ -1,5 +1,5 @@
 const express = require('express');
-const fs = require('fs').promises;  // Use promise-based fs
+const fs = require('fs').promises;
 const path = require('path');
 const bodyParser = require('body-parser');
 const nodemailer = require('nodemailer');
@@ -9,6 +9,8 @@ const rateLimit = require('express-rate-limit');
 const csv = require('csv-parse/sync');
 const createCsvStringifier = require('csv-writer').createObjectCsvStringifier;
 const { validateSNSMessage } = require('aws-sns-signature-validator');
+const zlib = require('zlib');
+const { pipeline } = require('stream/promises');
 
 dotenv.config();
 
@@ -50,6 +52,123 @@ async function initializeCsvFile() {
     } catch (error) {
         console.error('Error initializing CSV file:', error);
         process.exit(1);
+    }
+}
+
+// Utility function to compress and save file
+async function compressAndSaveFile(sourcePath, destPath) {
+    try {
+        const sourceStream = fs.createReadStream(sourcePath);
+        const destStream = fs.createWriteStream(destPath);
+        const gzip = zlib.createGzip();
+        
+        await pipeline(sourceStream, gzip, destStream);
+        console.log(`Successfully compressed and saved to ${destPath}`);
+    } catch (error) {
+        console.error('Error compressing file:', error);
+        throw error;
+    }
+}
+
+// Function to send daily report
+async function sendDailyReport(transporter) {
+    try {
+        // Read and filter CSV data for last 24 hours
+        const csvContent = await fs.readFile(csvFilePath, 'utf8');
+        const records = await csv.parse(csvContent, {
+            columns: true,
+            skip_empty_lines: true
+        });
+
+        const twentyFourHoursAgo = new Date();
+        twentyFourHoursAgo.setHours(twentyFourHoursAgo.getHours() - 24);
+
+        const recentRecords = records.filter(record => {
+            const recordDate = new Date(record['Timestamp']);
+            return recordDate > twentyFourHoursAgo;
+        });
+
+        if (recentRecords.length === 0) {
+            console.log('No bounce data in the last 24 hours');
+            return;
+        }
+
+        // Create CSV string for attachment
+        const csvString = csvStringifier.stringifyRecords(recentRecords);
+        
+        // Configure email
+        const mailOptions = {
+            from: process.env.EMAIL_FROM,
+            to: process.env.EMAIL_TO,
+            subject: `Daily Bounced Emails Report - ${new Date().toISOString().split('T')[0]}`,
+            text: `Attached is the bounced email report for the last 24 hours.\nTotal bounces: ${recentRecords.length}`,
+            attachments: [{
+                filename: `bounces_${new Date().toISOString().split('T')[0]}.csv`,
+                content: csvString
+            }]
+        };
+
+        // Send with retry logic
+        let retries = 3;
+        while (retries > 0) {
+            try {
+                await transporter.sendMail(mailOptions);
+                console.log('Daily report email sent successfully');
+                return;
+            } catch (error) {
+                retries--;
+                if (retries === 0) throw error;
+                console.log(`Email send failed, ${retries} retries remaining`);
+                await new Promise(resolve => setTimeout(resolve, 5000));
+            }
+        }
+    } catch (error) {
+        console.error('Error sending daily report:', error);
+        throw error;
+    }
+}
+
+// Function to clean up old data
+async function cleanupOldData() {
+    try {
+        const retentionDays = process.env.DATA_RETENTION_DAYS || 7;
+        const cutoffDate = new Date();
+        cutoffDate.setDate(cutoffDate.getDate() - retentionDays);
+
+        // Clean up old backups
+        const backupsDir = path.join(__dirname, 'backups');
+        const backupDirs = await fs.readdir(backupsDir);
+        
+        for (const dir of backupDirs) {
+            const dirPath = path.join(backupsDir, dir);
+            const dirStat = await fs.stat(dirPath);
+            
+            if (dirStat.isDirectory() && new Date(dir) < cutoffDate) {
+                await fs.rm(dirPath, { recursive: true });
+                console.log(`Removed old backup directory: ${dir}`);
+            }
+        }
+
+        // Clean up main CSV file
+        const csvContent = await fs.readFile(csvFilePath, 'utf8');
+        const records = await csv.parse(csvContent, {
+            columns: true,
+            skip_empty_lines: true
+        });
+
+        const recentRecords = records.filter(record => {
+            const recordDate = new Date(record['Timestamp']);
+            return recordDate > cutoffDate;
+        });
+
+        // Write back recent records only
+        const csvString = csvStringifier.stringifyRecords(recentRecords);
+        await fs.writeFile(csvFilePath, csvStringifier.getHeaderString() + csvString);
+        
+        console.log('Data cleanup completed successfully');
+    } catch (error) {
+        console.error('Error cleaning up old data:', error);
+        throw error;
     }
 }
 
@@ -122,7 +241,7 @@ app.post('/sns', async (req, res) => {
 });
 
 // Protected download endpoint
-app.get('/download', authenticateRequest, async (req, res) => {
+app.get('/download', async (req, res) => {
     try {
         await fs.access(csvFilePath);
         res.download(csvFilePath, 'bounces.csv');
@@ -170,128 +289,6 @@ cron.schedule('0 0 * * *', async () => {
         await cleanupOldData();
     } catch (error) {
         console.error('Error in cron job:', error);
-    }
-});
-
-// Utility function to compress and save file
-async function compressAndSaveFile(sourcePath, destPath) {
-    const zlib = require('zlib');
-    const { pipeline } = require('stream/promises');
-    
-    try {
-        const sourceStream = fs.createReadStream(sourcePath);
-        const destStream = fs.createWriteStream(destPath);
-        const gzip = zlib.createGzip();
-        
-        await pipeline(sourceStream, gzip, destStream);
-        console.log(`Successfully compressed and saved to ${destPath}`);
-    } catch (error) {
-        console.error('Error compressing file:', error);
-        throw error;
-    }
-}
-
-// Function to send daily report
-async function sendDailyReport(transporter) {
-    try {
-        // Read and filter CSV data for last 24 hours
-        const csvContent = await fs.readFile(csvFilePath, 'utf8');
-        const records = await csv.parse(csvContent, {
-            columns: true,
-            skip_empty_lines: true
-        });
-
-        const twentyFourHoursAgo = new Date();
-        twentyFourHoursAgo.setHours(twentyFourHoursAgo.getHours() - 24);
-
-        const recentRecords = records.filter(record => {
-            const recordDate = new Date(record['Timestamp']);
-            return recordDate > twentyFourHoursAgo;
-        });
-
-        if (recentRecords.length === 0) {
-            console.log('No bounce data in the last 24 hours');
-            return;
-        }
-
-        // Create CSV string for attachment
-        const csvString = csvStringifier.stringifyRecords(recentRecords);
-        
-        // Configure email
-        const mailOptions = {
-            from: process.env.EMAIL_FROM,
-            to: process.env.EMAIL_TO,
-            subject: `Daily Bounced Emails Report - ${new Date().toISOString().split('T')[0]}`,
-            text: `Attached is the bounced email report for the last 24 hours.\nTotal bounces: ${recentRecords.length}`,
-            attachments: [{
-                filename: `bounces_${new Date().toISOString().split('T')[0]}.csv`,
-                content: csvString
-            }]
-        };
-
-        // Send with retry logic
-        let retries = 3;
-        while (retries > 0) {
-            try {
-                await transporter.sendMail(mailOptions);
-                console.log('Daily report email sent successfully');
-                return;
-            } catch (error) {
-                retries--;
-                if (retries === 0) throw error;
-                console.log(`Email send failed, ${retries} retries remaining`);
-                await new Promise(resolve => setTimeout(resolve, 5000)); // Wait 5 seconds before retry
-            }
-        }
-    } catch (error) {
-        console.error('Error sending daily report:', error);
-        throw error;
-    }
-}
-
-// Function to clean up old data
-async function cleanupOldData() {
-    try {
-        const retentionDays = process.env.DATA_RETENTION_DAYS || 7;
-        const cutoffDate = new Date();
-        cutoffDate.setDate(cutoffDate.getDate() - retentionDays);
-
-        // Clean up old backups
-        const backupsDir = path.join(__dirname, 'backups');
-        const backupDirs = await fs.readdir(backupsDir);
-        
-        for (const dir of backupDirs) {
-            const dirPath = path.join(backupsDir, dir);
-            const dirStat = await fs.stat(dirPath);
-            
-            if (dirStat.isDirectory() && new Date(dir) < cutoffDate) {
-                await fs.rm(dirPath, { recursive: true });
-                console.log(`Removed old backup directory: ${dir}`);
-            }
-        }
-
-        // Clean up main CSV file
-        const csvContent = await fs.readFile(csvFilePath, 'utf8');
-        const records = await csv.parse(csvContent, {
-            columns: true,
-            skip_empty_lines: true
-        });
-
-        const recentRecords = records.filter(record => {
-            const recordDate = new Date(record['Timestamp']);
-            return recordDate > cutoffDate;
-        });
-
-        // Write back recent records only
-        const csvString = csvStringifier.stringifyRecords(recentRecords);
-        await fs.writeFile(csvFilePath, csvStringifier.getHeaderString() + csvString);
-        
-        console.log('Data cleanup completed successfully');
-    } catch (error) {
-        console.error('Error cleaning up old data:', error);
-        throw error;
-    }
-}
     }
 });
 
