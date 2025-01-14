@@ -28,14 +28,19 @@ const limiter = rateLimit({
 app.use(limiter);
 app.use(bodyParser.json());
 
-// CSV Configuration
+// CSV Configuration with added bounce reason fields
 const csvFilePath = path.join(__dirname, 'data', 'bounces_detailed.csv');
 const csvStringifier = createCsvStringifier({
     header: [
         { id: 'email', title: 'Bounced Email' },
         { id: 'timestamp', title: 'Timestamp' },
         { id: 'sourceEmail', title: 'Source Email' },
-        { id: 'sourceIp', title: 'Source IP' }
+        { id: 'sourceIp', title: 'Source IP' },
+        { id: 'bounceType', title: 'Bounce Type' },
+        { id: 'bounceSubType', title: 'Bounce Sub-Type' },
+        { id: 'diagnosticCode', title: 'Diagnostic Code' },
+        { id: 'reportingMTA', title: 'Reporting MTA' },
+        { id: 'feedbackId', title: 'Feedback ID' }
     ]
 });
 
@@ -96,12 +101,26 @@ async function sendDailyReport(transporter) {
         // Create CSV string for attachment
         const csvString = csvStringifier.stringifyRecords(recentRecords);
         
+        // Generate bounce type summary
+        const bounceTypeSummary = recentRecords.reduce((acc, record) => {
+            const type = record['Bounce Type'] || 'Unknown';
+            acc[type] = (acc[type] || 0) + 1;
+            return acc;
+        }, {});
+
+        // Create summary text
+        const summaryText = Object.entries(bounceTypeSummary)
+            .map(([type, count]) => `${type}: ${count}`)
+            .join('\n');
+        
         // Configure email
         const mailOptions = {
             from: process.env.EMAIL_FROM,
             to: process.env.EMAIL_TO,
             subject: `Daily Bounced Emails Report - ${new Date().toISOString().split('T')[0]}`,
-            text: `Attached is the bounced email report for the last 24 hours.\nTotal bounces: ${recentRecords.length}`,
+            text: `Attached is the bounced email report for the last 24 hours.\n\n` +
+                  `Total bounces: ${recentRecords.length}\n\n` +
+                  `Bounce Type Summary:\n${summaryText}`,
             attachments: [{
                 filename: `bounces_${new Date().toISOString().split('T')[0]}.csv`,
                 content: csvString
@@ -257,7 +276,7 @@ async function appendToCsv(data) {
     }
 }
 
-// SNS endpoint
+// SNS endpoint with enhanced bounce data collection
 app.post('/sns', async (req, res) => {
     try {
         console.log('Received SNS notification');
@@ -276,7 +295,12 @@ app.post('/sns', async (req, res) => {
             email: recipient.emailAddress,
             timestamp: bounce.timestamp,
             sourceEmail: mail.source,
-            sourceIp: mail.sourceIp
+            sourceIp: mail.sourceIp,
+            bounceType: bounce.bounceType || 'Unknown',
+            bounceSubType: bounce.bounceSubType || 'Unknown',
+            diagnosticCode: recipient.diagnosticCode || 'Not provided',
+            reportingMTA: bounce.reportingMTA || 'Not provided',
+            feedbackId: bounce.feedbackId || 'Not provided'
         }));
 
         await appendToCsv(bounceRecords);
