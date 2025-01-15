@@ -80,18 +80,34 @@ async function sendDailyReport(transporter) {
     try {
         // Read and filter CSV data for last 24 hours
         const csvContent = await fs.readFile(csvFilePath, 'utf8');
+        console.log('Read CSV content length:', csvContent.length);
+
         const records = await csv.parse(csvContent, {
             columns: true,
-            skip_empty_lines: true
+            skip_empty_lines: true,
+            trim: true
         });
+        
+        console.log('Total records found:', records.length);
 
         const twentyFourHoursAgo = new Date();
         twentyFourHoursAgo.setHours(twentyFourHoursAgo.getHours() - 24);
-
+        
         const recentRecords = records.filter(record => {
-            const recordDate = new Date(record['Timestamp']);
-            return recordDate > twentyFourHoursAgo;
+            try {
+                // Handle both ISO string and custom date formats
+                const recordDate = new Date(record['Timestamp'] || record['timestamp']);
+                const isRecent = recordDate > twentyFourHoursAgo;
+                console.log(`Record date: ${recordDate}, Is recent: ${isRecent}`);
+                return isRecent;
+            } catch (error) {
+                console.error('Error processing record date:', error);
+                console.log('Problematic record:', record);
+                return false;
+            }
         });
+
+        console.log('Recent records found:', recentRecords.length);
 
         if (recentRecords.length === 0) {
             console.log('No bounce data in the last 24 hours');
@@ -99,11 +115,12 @@ async function sendDailyReport(transporter) {
         }
 
         // Create CSV string for attachment
-        const csvString = csvStringifier.stringifyRecords(recentRecords);
+        const csvString = csvStringifier.getHeaderString() + csvStringifier.stringifyRecords(recentRecords);
+        console.log('Generated CSV length:', csvString.length);
         
         // Generate bounce type summary
         const bounceTypeSummary = recentRecords.reduce((acc, record) => {
-            const type = record['Bounce Type'] || 'Unknown';
+            const type = record['Bounce Type'] || record['bounceType'] || 'Unknown';
             acc[type] = (acc[type] || 0) + 1;
             return acc;
         }, {});
@@ -112,6 +129,9 @@ async function sendDailyReport(transporter) {
         const summaryText = Object.entries(bounceTypeSummary)
             .map(([type, count]) => `${type}: ${count}`)
             .join('\n');
+
+        // Log the summary for verification
+        console.log('Bounce Type Summary:', bounceTypeSummary);
         
         // Configure email
         const mailOptions = {
@@ -123,7 +143,8 @@ async function sendDailyReport(transporter) {
                   `Bounce Type Summary:\n${summaryText}`,
             attachments: [{
                 filename: `bounces_${new Date().toISOString().split('T')[0]}.csv`,
-                content: csvString
+                content: csvString,
+                contentType: 'text/csv'
             }]
         };
 
