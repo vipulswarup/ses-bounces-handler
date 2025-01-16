@@ -184,6 +184,34 @@ async function processSNSMessage(message) {
     }
 }
 
+// Add this endpoint after the existing /sns endpoint and before the server startup code
+
+app.get('/download', async (req, res) => {
+    try {
+        // Query all records from MongoDB
+        const allRecords = await Bounce.find({}).sort({ timestamp: -1 });
+
+        if (allRecords.length === 0) {
+            return res.status(404).json({ message: 'No bounce records found' });
+        }
+
+        // Generate CSV string using the existing csvStringifier
+        const csvString = csvStringifier.getHeaderString() + csvStringifier.stringifyRecords(allRecords);
+
+        // Set response headers for CSV download
+        res.setHeader('Content-Type', 'text/csv');
+        res.setHeader('Content-Disposition', `attachment; filename=bounce_records_${new Date().toISOString().split('T')[0]}.csv`);
+
+        // Send the CSV data
+        res.send(csvString);
+
+        console.log(`CSV download completed - ${allRecords.length} records`);
+    } catch (error) {
+        console.error('Error generating CSV download:', error);
+        res.status(500).json({ error: 'Internal server error while generating CSV' });
+    }
+});
+
 // Append bounce data to MongoDB collection and send response back to SNS
 app.post('/sns', async (req, res) => {
     try {
